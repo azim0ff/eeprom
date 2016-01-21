@@ -1,26 +1,22 @@
+#ifndef EEPROM_H
+#define	EEPROM_H
+
+#include <stdint.h>
+#include "c_types.h"
+#include "espressif/spi_flash.h"
+
 #define EEPROM_BASE 						0x2E000
 #define EEPROM_BYTES_PER_PAGE 	4096
 #define EEPROM_NUM_PAGES 				2
 //Keep number of slots low, if not using them. Affects performance
 #define EEPROM_NUM_SLOTS				16
 
-typedef struct {
-	uint16_t id;
-	uint16_t data;
-} eeprom_entry_t;
-
-typedef struct {
-	eeprom_page_status_t page_status;
-} eeprom_page_header;
-
 //there is also module status.. can be done as flags
 //or like a last error type deal
 
 typedef enum {
 	EEPROM_PAGE_STATUS_VALID 					= 0x00000000,
-	//EEPROM_PAGE_STATUS_COPYINPROG 		= 0xAAAAAAAA,	//may not need
 	EEPROM_PAGE_STATUS_ERASED 				= 0xFFFFFFFF,
-	//available/current/expired
 } eeprom_page_status_t;
 
 enum {
@@ -35,5 +31,19 @@ typedef enum {
 	EEPROM_STATUS_ERR = SPI_FLASH_RESULT_ERR,
 	EEPROM_STATUS_TIMEOUT = SPI_FLASH_RESULT_TIMEOUT,
 	EEPROM_STATUS_ID_NOT_FOUND,
-//	EEPROM_STATUS_COMPLETELY_FULL,
 } eeprom_status_t;
+
+typedef struct {
+	uint16_t id;
+	uint16_t data;
+} eeprom_entry_t;
+
+typedef struct {
+	eeprom_page_status_t page_status;
+} eeprom_page_header_t;
+
+eeprom_status_t eeprom_init();
+eeprom_status_t eeprom_read(uint16_t id, uint16_t* dest);
+eeprom_status_t eeprom_write(uint16_t id, uint16_t data);
+
+#endif // EEPROM_H
