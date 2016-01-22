@@ -1,7 +1,11 @@
 #include "eeprom.h"
 
-#include <stdio.h>
-#define EEPROM_DEBUG_PRINTF(...) printf(__VA_ARGS__)
+#if 0
+	#include <stdio.h>
+	#define EEPROM_DEBUG_PRINTF(...) printf(__VA_ARGS__)
+#else
+	#define EEPROM_DEBUG_PRINTF(...)
+#endif
 
 // iterate over pages to find
 static eeprom_status_t
@@ -146,7 +150,7 @@ eeprom_pack() {
 
 	//for every possible slot id ...
 	uint32_t num_written = 0;
-	for (uint16_t i = 0; i < EEPROM_NUM_SLOTS; i++) {
+	for (uint16_t i = 0; i < EEPROM_NUM_KEYS; i++) {
 
 		//try to read it from old page
 		uint16_t data;
@@ -160,8 +164,8 @@ eeprom_pack() {
 
 		//if found, write to new page
 		eeprom_entry_t entry;
-		entry.id = i;
-		entry.data = data;
+		entry.key = i;
+		entry.value = data;
 		num_written++;
 		EEPROM_DEBUG_PRINTF("about to write %u/0x%04x to page: %u, from: 0x%08x to phyaddr: 0x%05x\n", 
 													i, data, next_page, &entry, EEPROM_BASE
@@ -190,7 +194,7 @@ eeprom_pack() {
 	}
 	EEPROM_DEBUG_PRINTF("after pack space check, last slot: id: %u, data: 0x%04x\n", entry.id, entry.data);
 	//if full -> fatal error
-	if (entry.id != EEPROM_SLOT_EMPTY_ID) {
+	if (entry.key != EEPROM_EMPTY_KEY) {
 		return EEPROM_STATUS_ERR;
 	}
 	EEPROM_DEBUG_PRINTF("packed page not full - good!\n");
@@ -299,9 +303,9 @@ eeprom_init()
 }
 
 eeprom_status_t
-eeprom_read(uint16_t id, uint16_t* dest) {
+eeprom_read(uint16_t key, uint16_t* value) {
 	//check id
-	if (id > EEPROM_SLOT_MAX_ID || id == EEPROM_SLOT_EMPTY_ID) {
+	if (key > EEPROM_MAX_KEY || key == EEPROM_EMPTY_KEY) {
 		return EEPROM_STATUS_ERR;
 	}
 
@@ -312,7 +316,7 @@ eeprom_read(uint16_t id, uint16_t* dest) {
 		return status;
 	}
 
-	//starting from back, look for id
+	//starting from back, look for key
 	for (uint32_t i = EEPROM_BYTES_PER_PAGE - sizeof(eeprom_entry_t); i > 0; i -= sizeof(eeprom_entry_t)) {
 
 	  //if found return value
@@ -326,8 +330,8 @@ eeprom_read(uint16_t id, uint16_t* dest) {
 			return result;
 		}
 
-		if (entry.id == id) {
-			*dest = entry.data;
+		if (entry.key == key) {
+			*value = entry.value;
 			return EEPROM_STATUS_OK;
 		}
 	}
@@ -337,10 +341,10 @@ eeprom_read(uint16_t id, uint16_t* dest) {
 }
 
 eeprom_status_t
-eeprom_write(uint16_t id, uint16_t data) {
-	EEPROM_DEBUG_PRINTF("writing %u 0x%04x\n", id, data);
-	//check id	
-	if (id > EEPROM_SLOT_MAX_ID || id == EEPROM_SLOT_EMPTY_ID) {
+eeprom_write(uint16_t key, uint16_t value) {
+	EEPROM_DEBUG_PRINTF("writing %u 0x%04x\n", key, value);
+	//check key	
+	if (key > EEPROM_MAX_KEY || key == EEPROM_EMPTY_KEY) {
 		return EEPROM_STATUS_ERR;
 	}
 
@@ -362,10 +366,10 @@ eeprom_write(uint16_t id, uint16_t data) {
 	if (result != SPI_FLASH_RESULT_OK) {
 		return result;
 	}
-	EEPROM_DEBUG_PRINTF("last slot: id: %u, data: 0x%04x\n", entry.id, entry.data);
+	EEPROM_DEBUG_PRINTF("last slot: key: %u, value: 0x%04x\n", entry.key, entry.value);
 
 	//if full, call pack and update active page
-	if (entry.id != EEPROM_SLOT_EMPTY_ID) {
+	if (entry.key != EEPROM_EMPTY_KEY) {
 		status = eeprom_pack();
 		if (status != EEPROM_STATUS_OK) {
 			return status;
@@ -389,15 +393,15 @@ eeprom_write(uint16_t id, uint16_t data) {
 		if (result != SPI_FLASH_RESULT_OK) {
 			return result;
 		}
-		if (entry.id != EEPROM_SLOT_EMPTY_ID) {
+		if (entry.key != EEPROM_EMPTY_KEY) {
 			break;
 		}
 	}
 	EEPROM_DEBUG_PRINTF("last written page offset: %u bytes\n", used);
 
 	//used contains last used slot. write into the next one
-	entry.id = id;
-	entry.data = data;
+	entry.key = key;
+	entry.value = value;
 	return spi_flash_write(EEPROM_BASE
 											+ active_page*EEPROM_BYTES_PER_PAGE
 											+ used + sizeof(eeprom_entry_t), (uint32_t*) &entry, sizeof(entry));
