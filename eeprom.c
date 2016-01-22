@@ -3,9 +3,9 @@
 #include <stdio.h>
 #define EEPROM_DEBUG_PRINTF(...) printf(__VA_ARGS__)
 
-// iterate over pages to find the active one
+// iterate over pages to find
 static eeprom_status_t
-eeprom_find_active_page(uint32_t* page_index) {
+eeprom_find_page(eeprom_page_status_t status, uint32_t* found_page) {
 
 	eeprom_page_header_t t;
 
@@ -20,18 +20,18 @@ eeprom_find_active_page(uint32_t* page_index) {
 			return result;
 		}
 
-		if (t.page_status == EEPROM_PAGE_STATUS_VALID) {
-			*page_index = i;
+		if (t.page_status == status) {
+			*found_page = i;
 			return EEPROM_STATUS_OK;
 		}
 	}
 
 	//did not find
-	return EEPROM_STATUS_ERR;
+	return EEPROM_STATUS_NOT_FOUND;
 }
 
 static eeprom_status_t
-eeprom_find_next_page(uint32_t current_page, uint32_t* next_page) {
+eeprom_get_pack_dest(uint32_t current_page, uint32_t* next_page) {
 
 	EEPROM_DEBUG_PRINTF("find next page, current: %u\n", current_page);
 
@@ -48,19 +48,20 @@ eeprom_find_next_page(uint32_t current_page, uint32_t* next_page) {
 	if (result != SPI_FLASH_RESULT_OK) {
 		return result;
 	}
-	if (t.page_status != EEPROM_PAGE_STATUS_VALID) {
+	if (t.page_status != EEPROM_PAGE_STATUS_ACTIVE) {
 		return EEPROM_STATUS_ERR;
 	}
 	EEPROM_DEBUG_PRINTF("current page is current\n");
 
-	//roll forward looking for a status erased. even though
-	//this will always be the next page... it's just that
-	//maybe somehow it is not erased?
+	//roll forward looking for a fitting target.
+	//good place to check something about the new page
+	//before designating as next active.
 
 	*next_page = ((current_page + 1) % EEPROM_NUM_PAGES);
 	return EEPROM_STATUS_OK;
 }
 
+//page_index is the local index (eg 0/1)
 static eeprom_status_t
 eeprom_erase_page(uint16_t page_index) {
 	if (page_index >= EEPROM_NUM_PAGES) {
@@ -82,7 +83,7 @@ eeprom_format() {
 	}
 
 	//first page write header
-	uint32_t t = EEPROM_PAGE_STATUS_VALID;
+	uint32_t t = EEPROM_PAGE_STATUS_ACTIVE;
 	return spi_flash_write(EEPROM_BASE
 												+ EEPROM_BYTES_PER_PAGE*0
 												+ 0, &t, sizeof(t));
@@ -90,14 +91,34 @@ eeprom_format() {
 
 
 static eeprom_status_t
-//IRAM_ATTR
-eeprom_pack(uint32_t active_page) {
+eeprom_set_page_status(uint32_t page, eeprom_status_t status) {
+	
+	if (page >= EEPROM_NUM_PAGES) {
+		return EEPROM_STATUS_ERR;
+	}
+
+	SpiFlashOpResult result = spi_flash_write(EEPROM_BASE
+													+ EEPROM_BYTES_PER_PAGE*page
+													+ 0, &status, sizeof(status));
+	if (result != SPI_FLASH_RESULT_OK) {
+		return result;
+	}
+}
+
+static eeprom_status_t
+eeprom_pack() {
 	EEPROM_DEBUG_PRINTF("packing...\n");
+
+	//find active page
+	uint32_t active_page;
+	eeprom_status_t status = eeprom_find_page(EEPROM_PAGE_STATUS_ACTIVE, &active_page);
+	if (status != EEPROM_STATUS_OK) {
+		return status;
+	}
 
 	//find next page
 	uint32_t next_page;
-	eeprom_status_t status = 
-		eeprom_find_next_page(active_page, &next_page);
+	status = eeprom_get_pack_dest(active_page, &next_page);
 	if (status != EEPROM_STATUS_OK) {
 		return status;
 	}
@@ -117,25 +138,20 @@ eeprom_pack(uint32_t active_page) {
 	}
 	EEPROM_DEBUG_PRINTF("next page header: %x\n", h.page_status);
 
-	//mark new page as valid
-	uint32_t valid_status = EEPROM_PAGE_STATUS_VALID;
-	result = spi_flash_write(EEPROM_BASE
-													+ EEPROM_BYTES_PER_PAGE*next_page
-													+ 0, &valid_status, sizeof(valid_status));
-	if (result != SPI_FLASH_RESULT_OK) {
-		return result;
+	//mark destination
+	status = eeprom_set_page_status(next_page, EEPROM_PAGE_STATUS_COPY);
+	if (status != SPI_FLASH_RESULT_OK) {
+		return status;
 	}
 
 	//for every possible slot id ...
 	uint32_t num_written = 0;
 	for (uint16_t i = 0; i < EEPROM_NUM_SLOTS; i++) {
 
-//**** eeprom_read will look for active page, which has just been reset
-
 		//try to read it from old page
 		uint16_t data;
-		status = eeprom_read(i, &data);
-		if (status == EEPROM_STATUS_ID_NOT_FOUND) {
+		status = eeprom_read(i, &data); //will read from active page!
+		if (status == EEPROM_STATUS_NOT_FOUND) {
 			continue;
 		} else if (status != EEPROM_STATUS_OK) {
 			return status;
@@ -180,7 +196,13 @@ eeprom_pack(uint32_t active_page) {
 	EEPROM_DEBUG_PRINTF("packed page not full - good!\n");
 
 	//erase old page
-	return eeprom_erase_page(active_page);
+	status = eeprom_erase_page(active_page);
+	if (status != EEPROM_STATUS_OK) {
+		return status;
+	}
+
+	//upgrade new page
+	return eeprom_set_page_status(next_page, EEPROM_PAGE_STATUS_ACTIVE);
 }
 
 // -----------------------------------------
@@ -190,8 +212,9 @@ eeprom_pack(uint32_t active_page) {
 eeprom_status_t
 eeprom_init()
 {
-	//find active page, deal with none/1/2/3+
-	uint32_t num_current_pages = 0;
+	//count statuses among all pages
+	uint32_t num_active = 0;
+	uint32_t num_copy = 0;
 	for (uint32_t i = 0; i < EEPROM_NUM_PAGES; i++) {
 
 		//read status word
@@ -204,31 +227,75 @@ eeprom_init()
 			return result;
 		}
 
-		if (t == EEPROM_PAGE_STATUS_VALID) {
-			num_current_pages++;
+		switch(t) {
+			case EEPROM_PAGE_STATUS_ACTIVE:
+				num_active++;
+				break;
+			case EEPROM_PAGE_STATUS_COPY:
+				num_copy++;
+				break;
+			default:
+				break;
 		}
 	}
-	EEPROM_DEBUG_PRINTF("found %d active pages\n", num_current_pages);
+	EEPROM_DEBUG_PRINTF("found %u active, %u copy\n", num_active, num_copy);
 
-	if (num_current_pages == 0) {
-		// uninitialized, reformat?
+	//decision matrix
+	eeprom_status_t status;
+	if (num_active >= 2) {
+		//nuke
 		return eeprom_format();
-	} else if (num_current_pages == 1) {
-		// normal, nothing to do
+	} else if (num_copy >= 2) {
+		//nuke
+		return eeprom_format();
+	} else if (num_active == 0 && num_copy == 0) {
+		//new
+		return eeprom_set_page_status(0, EEPROM_PAGE_STATUS_ACTIVE);
+	} else if (num_active == 1 && num_copy == 0) {
+		//normal
 		return EEPROM_STATUS_OK;
-	} else if (num_current_pages == 2) {
-		// died during packing
-		uint32_t first_current_page;
-		eeprom_status_t status = eeprom_find_active_page(&first_current_page);
+	} else if (num_active == 0 && num_copy == 1) {
+		//copy complete, but erase possibly not
+		//find copy page
+		uint32_t copy_page;
+		status = eeprom_find_page(EEPROM_PAGE_STATUS_COPY, &copy_page);
 		if (status != EEPROM_STATUS_OK) {
 			return status;
 		}
-
-		return eeprom_pack(first_current_page);
-	} else {
-		// unknown corruption, reformat?
-		return eeprom_format();
+		//mark as current
+		status = eeprom_set_page_status(copy_page, EEPROM_PAGE_STATUS_ACTIVE);
+		if (status != EEPROM_STATUS_OK) {
+			return status;
+		}
+		//re-erase all others
+		for (uint32_t i = 0; i < EEPROM_NUM_PAGES; i++) {
+			if (i == copy_page) {
+				continue;
+			}
+			status = eeprom_erase_page(i);
+			if (status != EEPROM_STATUS_OK) {
+				return status;
+			}
+		}
+	} else if (num_active == 1 && num_copy == 1) {
+		//copy incomplete
+		//find pack dest
+		uint32_t copy_page;
+		status = eeprom_find_page(EEPROM_PAGE_STATUS_COPY, &copy_page);
+		if (status != EEPROM_STATUS_OK) {
+			return status;
+		}
+		//erase dest
+		status = eeprom_erase_page(copy_page);
+		if (status != EEPROM_STATUS_OK) {
+			return status;
+		}
+		//redo pack
+		return eeprom_pack();
 	}
+
+	//we should never make it to here
+	return EEPROM_STATUS_ERR;
 }
 
 eeprom_status_t
@@ -240,7 +307,7 @@ eeprom_read(uint16_t id, uint16_t* dest) {
 
 	//find active page
 	uint32_t active_page;
-	eeprom_status_t status = eeprom_find_active_page(&active_page);
+	eeprom_status_t status = eeprom_find_page(EEPROM_PAGE_STATUS_ACTIVE, &active_page);
 	if (status != EEPROM_STATUS_OK) {
 		return status;
 	}
@@ -266,7 +333,7 @@ eeprom_read(uint16_t id, uint16_t* dest) {
 	}
 
 	//return not found
-	return EEPROM_STATUS_ID_NOT_FOUND;
+	return EEPROM_STATUS_NOT_FOUND;
 }
 
 eeprom_status_t
@@ -279,7 +346,7 @@ eeprom_write(uint16_t id, uint16_t data) {
 
 	//find active page
 	uint32_t active_page;
-	eeprom_status_t status = eeprom_find_active_page(&active_page);
+	eeprom_status_t status = eeprom_find_page(EEPROM_PAGE_STATUS_ACTIVE, &active_page);
 	if (status != EEPROM_STATUS_OK) {
 		return status;
 	}
@@ -299,12 +366,15 @@ eeprom_write(uint16_t id, uint16_t data) {
 
 	//if full, call pack and update active page
 	if (entry.id != EEPROM_SLOT_EMPTY_ID) {
-		status = eeprom_pack(active_page);
+		status = eeprom_pack();
 		if (status != EEPROM_STATUS_OK) {
 			return status;
 		}
 
-		active_page = (active_page + 1) % EEPROM_NUM_PAGES;
+		status = eeprom_find_page(EEPROM_PAGE_STATUS_ACTIVE, &active_page);
+		if (status != EEPROM_STATUS_OK) {
+			return status;
+		}
 	}
 	EEPROM_DEBUG_PRINTF("active page: %u\n", active_page);
 

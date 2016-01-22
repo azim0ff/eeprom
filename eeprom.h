@@ -15,7 +15,7 @@
 //or like a last error type deal
 
 typedef enum {
-	EEPROM_PAGE_STATUS_VALID 					= 0x00000000,
+	EEPROM_PAGE_STATUS_ACTIVE 				= 0x00000000,
 	EEPROM_PAGE_STATUS_COPY						= 0xAAAAAAAA,
 	EEPROM_PAGE_STATUS_ERASED 				= 0xFFFFFFFF,
 } eeprom_page_status_t;
@@ -31,7 +31,7 @@ typedef enum {
 	EEPROM_STATUS_OK = SPI_FLASH_RESULT_OK,
 	EEPROM_STATUS_ERR = SPI_FLASH_RESULT_ERR,
 	EEPROM_STATUS_TIMEOUT = SPI_FLASH_RESULT_TIMEOUT,
-	EEPROM_STATUS_ID_NOT_FOUND,
+	EEPROM_STATUS_NOT_FOUND,
 } eeprom_status_t;
 
 typedef struct __attribute__((aligned(4))) {
