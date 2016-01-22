@@ -16,6 +16,7 @@
 
 typedef enum {
 	EEPROM_PAGE_STATUS_VALID 					= 0x00000000,
+	EEPROM_PAGE_STATUS_COPY						= 0xAAAAAAAA,
 	EEPROM_PAGE_STATUS_ERASED 				= 0xFFFFFFFF,
 } eeprom_page_status_t;
 
@@ -33,12 +34,12 @@ typedef enum {
 	EEPROM_STATUS_ID_NOT_FOUND,
 } eeprom_status_t;
 
-typedef struct {
+typedef struct __attribute__((aligned(4))) {
 	uint16_t id;
 	uint16_t data;
 } eeprom_entry_t;
 
-typedef struct {
+typedef struct __attribute__((aligned(4))) {
 	eeprom_page_status_t page_status;
 } eeprom_page_header_t;
 

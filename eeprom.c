@@ -1,5 +1,8 @@
 #include "eeprom.h"
 
+#include <stdio.h>
+#define EEPROM_DEBUG_PRINTF(...) printf(__VA_ARGS__)
+
 // iterate over pages to find the active one
 static eeprom_status_t
 eeprom_find_active_page(uint32_t* page_index) {
@@ -30,6 +33,8 @@ eeprom_find_active_page(uint32_t* page_index) {
 static eeprom_status_t
 eeprom_find_next_page(uint32_t current_page, uint32_t* next_page) {
 
+	EEPROM_DEBUG_PRINTF("find next page, current: %u\n", current_page);
+
 	if (current_page >= EEPROM_NUM_PAGES) {
 		return EEPROM_STATUS_ERR;
 	}
@@ -43,16 +48,17 @@ eeprom_find_next_page(uint32_t current_page, uint32_t* next_page) {
 	if (result != SPI_FLASH_RESULT_OK) {
 		return result;
 	}
-
 	if (t.page_status != EEPROM_PAGE_STATUS_VALID) {
 		return EEPROM_STATUS_ERR;
 	}
+	EEPROM_DEBUG_PRINTF("current page is current\n");
 
 	//roll forward looking for a status erased. even though
 	//this will always be the next page... it's just that
 	//maybe somehow it is not erased?
 
-	return ((current_page + 1) % EEPROM_NUM_PAGES);
+	*next_page = ((current_page + 1) % EEPROM_NUM_PAGES);
+	return EEPROM_STATUS_OK;
 }
 
 static eeprom_status_t
@@ -84,7 +90,9 @@ eeprom_format() {
 
 
 static eeprom_status_t
+//IRAM_ATTR
 eeprom_pack(uint32_t active_page) {
+	EEPROM_DEBUG_PRINTF("packing...\n");
 
 	//find next page
 	uint32_t next_page;
@@ -93,6 +101,7 @@ eeprom_pack(uint32_t active_page) {
 	if (status != EEPROM_STATUS_OK) {
 		return status;
 	}
+	EEPROM_DEBUG_PRINTF("next page: %u\n", next_page);
 
 	//make sure next page is indeed empty
 	eeprom_page_header_t h;
@@ -106,6 +115,7 @@ eeprom_pack(uint32_t active_page) {
 	if (h.page_status != EEPROM_PAGE_STATUS_ERASED) {
 		return EEPROM_STATUS_ERR;
 	}
+	EEPROM_DEBUG_PRINTF("next page header: %x\n", h.page_status);
 
 	//mark new page as valid
 	uint32_t valid_status = EEPROM_PAGE_STATUS_VALID;
@@ -117,7 +127,11 @@ eeprom_pack(uint32_t active_page) {
 	}
 
 	//for every possible slot id ...
+	uint32_t num_written = 0;
 	for (uint16_t i = 0; i < EEPROM_NUM_SLOTS; i++) {
+
+//**** eeprom_read will look for active page, which has just been reset
+
 		//try to read it from old page
 		uint16_t data;
 		status = eeprom_read(i, &data);
@@ -126,34 +140,44 @@ eeprom_pack(uint32_t active_page) {
 		} else if (status != EEPROM_STATUS_OK) {
 			return status;
 		}
+		EEPROM_DEBUG_PRINTF("read [%u,0x%04x]\n", i, data);
 
 		//if found, write to new page
-		status = eeprom_write(i, data);
-		if (status != EEPROM_STATUS_OK) {
-			return status;
+		eeprom_entry_t entry;
+		entry.id = i;
+		entry.data = data;
+		num_written++;
+		EEPROM_DEBUG_PRINTF("about to write %u/0x%04x to page: %u, from: 0x%08x to phyaddr: 0x%05x\n", 
+													i, data, next_page, &entry, EEPROM_BASE
+													+ EEPROM_BYTES_PER_PAGE*next_page
+													+ num_written*sizeof(eeprom_entry_t));
+		result = spi_flash_write(EEPROM_BASE
+													+ EEPROM_BYTES_PER_PAGE*next_page
+													+ num_written*sizeof(eeprom_entry_t),
+													(uint32_t*) &entry, sizeof(entry));
+		if (result != SPI_FLASH_RESULT_OK) {
+			EEPROM_DEBUG_PRINTF("result: %d\n", result);
+			return result;
 		}
+		EEPROM_DEBUG_PRINTF("wrote [%u,0x%04x]\n",i,data);
 	}
 
 	//make sure there is some empty room after packing
-	//find active page
-	uint32_t new_active_page;
-	status = eeprom_find_active_page(&new_active_page);
-	if (status != EEPROM_STATUS_OK) {
-		return status;
-	}
 	//read last slot to check for room
 	eeprom_entry_t entry;
 	result = spi_flash_read(EEPROM_BASE
-				           + new_active_page*EEPROM_BYTES_PER_PAGE 
+				           + next_page*EEPROM_BYTES_PER_PAGE 
 				           + EEPROM_BYTES_PER_PAGE - sizeof(eeprom_entry_t),
 				           (uint32_t*) &entry, sizeof(entry));
 	if (result != SPI_FLASH_RESULT_OK) {
 		return result;
 	}
+	EEPROM_DEBUG_PRINTF("after pack space check, last slot: id: %u, data: 0x%04x\n", entry.id, entry.data);
 	//if full -> fatal error
 	if (entry.id != EEPROM_SLOT_EMPTY_ID) {
 		return EEPROM_STATUS_ERR;
 	}
+	EEPROM_DEBUG_PRINTF("packed page not full - good!\n");
 
 	//erase old page
 	return eeprom_erase_page(active_page);
@@ -184,6 +208,7 @@ eeprom_init()
 			num_current_pages++;
 		}
 	}
+	EEPROM_DEBUG_PRINTF("found %d active pages\n", num_current_pages);
 
 	if (num_current_pages == 0) {
 		// uninitialized, reformat?
@@ -246,7 +271,7 @@ eeprom_read(uint16_t id, uint16_t* dest) {
 
 eeprom_status_t
 eeprom_write(uint16_t id, uint16_t data) {
-
+	EEPROM_DEBUG_PRINTF("writing %u 0x%04x\n", id, data);
 	//check id	
 	if (id > EEPROM_SLOT_MAX_ID || id == EEPROM_SLOT_EMPTY_ID) {
 		return EEPROM_STATUS_ERR;
@@ -258,6 +283,7 @@ eeprom_write(uint16_t id, uint16_t data) {
 	if (status != EEPROM_STATUS_OK) {
 		return status;
 	}
+	EEPROM_DEBUG_PRINTF("activate page: %u\n", active_page);
 
 	//read last slot to check for room
 	eeprom_entry_t entry;
@@ -269,6 +295,7 @@ eeprom_write(uint16_t id, uint16_t data) {
 	if (result != SPI_FLASH_RESULT_OK) {
 		return result;
 	}
+	EEPROM_DEBUG_PRINTF("last slot: id: %u, data: 0x%04x\n", entry.id, entry.data);
 
 	//if full, call pack and update active page
 	if (entry.id != EEPROM_SLOT_EMPTY_ID) {
@@ -279,6 +306,7 @@ eeprom_write(uint16_t id, uint16_t data) {
 
 		active_page = (active_page + 1) % EEPROM_NUM_PAGES;
 	}
+	EEPROM_DEBUG_PRINTF("active page: %u\n", active_page);
 
 	//find last slot in active page
 	uint32_t used = EEPROM_BYTES_PER_PAGE - 2*sizeof(eeprom_entry_t);
@@ -295,6 +323,7 @@ eeprom_write(uint16_t id, uint16_t data) {
 			break;
 		}
 	}
+	EEPROM_DEBUG_PRINTF("last written page offset: %u bytes\n", used);
 
 	//used contains last used slot. write into the next one
 	entry.id = id;
