@@ -11,9 +11,6 @@
 //Keep number of slots low, if not using them. Affects performance
 #define EEPROM_NUM_SLOTS				16
 
-//there is also module status.. can be done as flags
-//or like a last error type deal
-
 typedef enum {
 	EEPROM_PAGE_STATUS_ACTIVE 				= 0x00000000,
 	EEPROM_PAGE_STATUS_COPY						= 0xAAAAAAAA,
@@ -35,8 +32,8 @@ typedef enum {
 } eeprom_status_t;
 
 typedef struct __attribute__((aligned(4))) {
-	uint16_t id;
-	uint16_t data;
+	uint16_t key;
+	uint16_t value;
 } eeprom_entry_t;
 
 typedef struct __attribute__((aligned(4))) {
@@ -44,7 +41,7 @@ typedef struct __attribute__((aligned(4))) {
 } eeprom_page_header_t;
 
 eeprom_status_t eeprom_init();
-eeprom_status_t eeprom_read(uint16_t id, uint16_t* dest);
-eeprom_status_t eeprom_write(uint16_t id, uint16_t data);
+eeprom_status_t eeprom_read(uint16_t key, uint16_t* value);
+eeprom_status_t eeprom_write(uint16_t key, uint16_t value);
 
 #endif // EEPROM_H
