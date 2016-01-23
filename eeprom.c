@@ -1,3 +1,11 @@
+/****************************************************************************
+ * Copyright 2015,2016 azim0ff/kacangbawang.com
+ *
+ * Description: EEPROM emulation for ESP8266
+ *
+ * License: MIT License
+ ****************************************************************************/
+
 #include "eeprom.h"
 
 #if 0
