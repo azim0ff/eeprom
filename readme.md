@@ -1,6 +1,6 @@
 This is an implementation of a key-value EEPROM for ESP8266. Keys and values are 16-bit ints. It should work with both the non-OS and the RTOS SDKs. There are no additional dependencies aside from the SDK.
 
-**How to use
+### How to use
 Add to project and edit eeprom.h. At the top of the file you will see several settings that should be selected to match your system. Let''s go over them.
 
 ```c
