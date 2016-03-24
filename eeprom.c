@@ -115,6 +115,8 @@ eeprom_set_page_status(uint32_t page, eeprom_status_t status) {
 	if (result != SPI_FLASH_RESULT_OK) {
 		return result;
 	}
+
+	return EEPROM_STATUS_OK;
 }
 
 static eeprom_status_t
@@ -129,7 +131,7 @@ eeprom_pack() {
 	}
 
 	//find next page
-	uint32_t next_page;
+	uint32_t next_page = 0;
 	status = eeprom_get_pack_dest(active_page, &next_page);
 	if (status != EEPROM_STATUS_OK) {
 		return status;
@@ -152,7 +154,7 @@ eeprom_pack() {
 
 	//mark destination
 	status = eeprom_set_page_status(next_page, EEPROM_PAGE_STATUS_COPY);
-	if (status != SPI_FLASH_RESULT_OK) {
+	if (status != EEPROM_STATUS_OK) {
 		return status;
 	}
 
